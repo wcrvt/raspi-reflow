@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "pi-spi": "^1.2.1",
+    "rpi-gpio": "^2.1.7"
+  }
+}
