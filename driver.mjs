@@ -14,8 +14,8 @@ const SPI_BITORDER = spi.order.MSB_FIRST;
 const GPIO_CHANNELS = [3, 5];
 const GPIO_NUM = GPIO_CHANNELS.length;
 const MAX31855_MISODATASIZE = 4;
-const MAX31855_EXTTEMPCONFIG = { mask: 0x7ffc0000, shift: 18, gain: 0.25};
-const MAX31855_INTTEMPCONFIG = { mask: 0x0000fff0, shift: 4, gain: 0.0625};
+const MAX31855_EXTTEMPCONFIG = { mask: 0x7ffc0000, shift: 18, gain: 0.25, offset: -7.0};
+const MAX31855_INTTEMPCONFIG = { mask: 0x0000fff0, shift: 4, gain: 0.0625, offset: 0.0};
 
 const CNT_APPROVED = 3;
 
@@ -118,8 +118,8 @@ class RaspiROC {
         if (err) reject(err);
         const recv = data.readUInt32BE();
         this.#tempExtZ1 = this.#tempExt;
-        this.#tempExt = ((recv & MAX31855_EXTTEMPCONFIG.mask) >> MAX31855_EXTTEMPCONFIG.shift) * MAX31855_EXTTEMPCONFIG.gain;
-        this.#tempInt = ((recv & MAX31855_INTTEMPCONFIG.mask) >> MAX31855_INTTEMPCONFIG.shift) * MAX31855_INTTEMPCONFIG.gain;
+        this.#tempExt = ((recv & MAX31855_EXTTEMPCONFIG.mask) >> MAX31855_EXTTEMPCONFIG.shift) * MAX31855_EXTTEMPCONFIG.gain + MAX31855_EXTTEMPCONFIG.offset;
+        this.#tempInt = ((recv & MAX31855_INTTEMPCONFIG.mask) >> MAX31855_INTTEMPCONFIG.shift) * MAX31855_INTTEMPCONFIG.gain + MAX31855_INTTEMPCONFIG.offset;
         this.#tempExtDiff = (this.#tempExt && this.#tempExtZ1)? this.#tempExt - this.#tempExtZ1 : null;
         resolve({external: this.#tempExt, internal: this.#tempInt});
       });

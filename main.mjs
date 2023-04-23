@@ -1,7 +1,7 @@
 import board from './driver.mjs';
 
 await board.setup();
-
+console.log(await board.read())
 board.reflow();
 
 /*
