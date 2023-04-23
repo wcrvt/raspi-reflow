@@ -19,7 +19,7 @@ const MAX31855_INTTEMPCONFIG = { mask: 0x0000fff0, shift: 4, gain: 0.0625};
 
 const CNT_APPROVED = 3;
 
-const ROC_STAT = ['PREHEATING', 'FLUXACTIVATION', 'MAINHEATING', 'RESIDUALHEATING'];
+const ROC_STAT = ['WAIT', 'PREHEATING', 'FLUXACTIVATION', 'MAINHEATING', 'RESIDUALHEATING'];
 const ROC_STAGENUM = ROC_STAT.length;
 const ROC_PARAM = {
   PREHEATING: {THRESHOLD_TEMP: 120.0, TIMELIMIT: 0, PWMCYCLE: 10, PWMON: 10, DISSIPATION_DETECT: false},
@@ -30,26 +30,31 @@ const ROC_PARAM = {
 
 //RaspiReflowOvenControlBoard
 class RaspiROC {
+
+  /* Private */
+  // SPI device
+  #spidev = null;
+  // Temperature
+  #tempExt = 0.0;
+  #tempInt = 0.0;
+  #tempExtZ1 = null;
+  #tempExtDiff = null;
+  #tempExtData = [];
+  // Reflow parameter
+  #ctask = null;
+  #stm = 0;
+  #isHeating = false;
+  #isFinish = false;
+  #cnt = 0;
+  #timer = 0;
+  #timecnt = 0;
+  #pwmcnt = 0;
+
   constructor(spiDev, spiSpeed, spiBitOrder) {
     // Board
-    this.spidev = spi.initialize(spiDev);
-    this.spidev.clockSpeed(spiSpeed);
-    this.spidev.bitOrder(spiBitOrder);
-    // Temperature
-    this.tempExt = 0.0;
-    this.tempInt = 0.0;
-    this.tempExtZ1 = null;
-    this.tempExtDiff = null;
-    this.tempExtData = [];
-    // Reflow parameter
-    this.ctask = null;
-    this.stm = 0;
-    this.isHeating = false;
-    this.finish = false;
-    this.cnt = 0;
-    this.timer = 0;
-    this.timecnt = 0;
-    this.pwmcnt = 0;
+    this.#spidev = spi.initialize(spiDev);
+    this.#spidev.clockSpeed(spiSpeed);
+    this.#spidev.bitOrder(spiBitOrder);
   };
 
   setup = async _ => {
@@ -61,7 +66,7 @@ class RaspiROC {
     this.ssr_deactivate();
     this.stopReflowTask();
     gpio.destroy();
-    this.spidev.close();
+    this.#spidev.close();
   };
 
   reset = _ => {
@@ -71,33 +76,33 @@ class RaspiROC {
   };
 
   resetLocalTimers = _ => {
-    this.cnt = 0;
-    this.timecnt = 0;
-    this.pwmcnt = 0;
+    this.#cnt = 0;
+    this.#timecnt = 0;
+    this.#pwmcnt = 0;
   };
 
   resetAllTimers = _ => {
-    this.timer = 0;
+    this.#timer = 0;
     this.resetLocalTimers();
   };
 
   resetRetainedData = _ => {
     // Temperature
-    this.tempExt = 0.0;
-    this.tempInt = 0.0;
-    this.tempExtZ1 = null;
-    this.tempExtDiff = null;
-    this.tempExtData = [];
+    this.#tempExt = 0.0;
+    this.#tempInt = 0.0;
+    this.#tempExtZ1 = null;
+    this.#tempExtDiff = null;
+    this.#tempExtData = [];
   };
 
   stopReflowTask = _ => {
-    if (this.ctask !== null) clearInterval(this.ctask);
-    this.ctask = null;
+    if (this.#ctask !== null) clearInterval(this.#ctask);
+    this.#ctask = null;
     this.ssr_deactivate();
     this.resetAllTimers();
-    this.stm = 0;
-    this.isHeating = false;
-    this.finish = false;
+    this.#stm = 0;
+    this.#isHeating = false;
+    this.#isFinish = false;
   };
 
   ssr_switch = (ch = -1, ena = false) => {
@@ -109,60 +114,70 @@ class RaspiROC {
 
   read = async _ => {
     return new Promise((resolve, reject) => {
-      this.spidev.read(MAX31855_MISODATASIZE, (err, data) => {
+      this.#spidev.read(MAX31855_MISODATASIZE, (err, data) => {
         if (err) reject(err);
         const recv = data.readUInt32BE();
-        this.tempExtZ1 = this.tempExt;
-        this.tempExt = ((recv & MAX31855_EXTTEMPCONFIG.mask) >> MAX31855_EXTTEMPCONFIG.shift) * MAX31855_EXTTEMPCONFIG.gain;
-        this.tempInt = ((recv & MAX31855_INTTEMPCONFIG.mask) >> MAX31855_INTTEMPCONFIG.shift) * MAX31855_INTTEMPCONFIG.gain;
-        this.tempExtDiff = (this.tempExt && this.tempExtZ1)? this.tempExt - this.tempExtZ1 : null;
-        resolve({external: this.tempExt, internal: this.tempInt});
+        this.#tempExtZ1 = this.#tempExt;
+        this.#tempExt = ((recv & MAX31855_EXTTEMPCONFIG.mask) >> MAX31855_EXTTEMPCONFIG.shift) * MAX31855_EXTTEMPCONFIG.gain;
+        this.#tempInt = ((recv & MAX31855_INTTEMPCONFIG.mask) >> MAX31855_INTTEMPCONFIG.shift) * MAX31855_INTTEMPCONFIG.gain;
+        this.#tempExtDiff = (this.#tempExt && this.#tempExtZ1)? this.#tempExt - this.#tempExtZ1 : null;
+        resolve({external: this.#tempExt, internal: this.#tempInt});
       });
     });
   };
 
   reflow = (ts_ms = 1000) => {
     const ts = ts_ms * 1e-3;
-    this.stm = 1;
-    this.finish = false;
+    this.#stm = 1;
+    this.#isFinish = false;
     this.resetRetainedData();
     this.resetAllTimers();
 
-    this.ctask = setInterval(async () => {
+    this.#ctask = setInterval(async () => {
       const temp = await this.read();
 
-      this.tempExtData.push({time: this.timer, temp: temp.external});
-      this.timer += ts;
+      this.#tempExtData.push({time: this.#timer, temp: temp.external});
+      this.#timer += ts;
 
-      console.log(this.timer, this.stm, this.tempExt);
+      console.log(this.#timer, this.#stm, this.#tempExt);
 
-      if (this.stm >= 1 && this.stm <= ROC_STAGENUM) {
-        const stage = ROC_STAT[this.stm - 1];
+      if (this.#stm >= 1 && this.#stm <= ROC_STAGENUM) {
+        const stage = ROC_STAT[this.#stm];
         const param = ROC_PARAM[stage];
 
-        this.timecnt++;
-        const isTimerover = param.TIMELIMIT > 0 && this.timecnt * ts > param.TIMELIMIT;
-        const isHeatDissipatedDetected = param.DISSIPATION_DETECT && this.tempExtDiff < 0.0;
+        this.#timecnt++;
+        const isTimerover = param.TIMELIMIT > 0 && this.#timecnt * ts > param.TIMELIMIT;
+        const isHeatDissipatedDetected = param.DISSIPATION_DETECT && this.#tempExtDiff < 0.0;
 
-        this.cnt = (this.tempExt > param.THRESHOLD_TEMP || isHeatDissipatedDetected)? this.cnt + 1 : this.cnt;
-        this.pwmcnt = (this.pwmcnt < param.PWMCYCLE - 1)? this.pwmcnt + 1 : 0;
-        this.isHeating = this.pwmcnt < param.PWMON;
-        this.ssr_switch(-1, this.isHeating);
+        this.#cnt = (this.#tempExt > param.THRESHOLD_TEMP || isHeatDissipatedDetected)? this.#cnt + 1 : this.#cnt;
+        this.#pwmcnt = (this.#pwmcnt < param.PWMCYCLE - 1)? this.#pwmcnt + 1 : 0;
+        this.#isHeating = this.#pwmcnt < param.PWMON;
+        this.ssr_switch(-1, this.#isHeating);
 
-        if (this.cnt >= CNT_APPROVED || isTimerover) {
+        if (this.#cnt >= CNT_APPROVED || isTimerover) {
           this.resetLocalTimers();
-          this.stm++;
+          this.#stm = (this.#stm == ROC_STAGENUM)? 0 : this.#stm + 1;
         };
 
-      } else if (this.stm > ROC_STAGENUM) {
+      } else if (this.#stm > ROC_STAGENUM) {
         this.ssr_deactivate();
         this.resetAllTimers();
         this.stopReflowTask();
-        this.stm = 0;
-        this.finish = true;
+        this.#stm = 0;
+        this.#isFinish = true;
       };
     }, ts_ms);
   };
+
+  getStatus = _ => ({
+    stage: ROC_STAT[this.#stm],
+    time: this.#timer,
+    tempExt: this.#tempExt,
+    tempInt: this.#tempInt,
+    tempSeries: this.#tempExtData,
+    isFinished: this.#isFinish,
+  });
+
 };
 
 export default new RaspiROC(SPI_DEVS.ch0, SPI_SPEED, SPI_BITORDER);
