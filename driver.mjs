@@ -125,7 +125,7 @@ class RaspiROC {
     const ts = ts_ms * 1e-3;
     this.stm = 1;
     this.finish = false;
-    this.tempExtData = [];
+    this.resetRetainedData();
     this.resetAllTimers();
 
     this.ctask = setInterval(async () => {
